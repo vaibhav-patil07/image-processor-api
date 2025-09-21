@@ -19,9 +19,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"github.com/google/uuid"
 )
 
 type ServerUp struct{
@@ -44,6 +44,12 @@ type ImageInfo struct {
 	Width int `json:"width"`
 	Height int `json:"height"`
 	userId string
+}
+
+type ImageProcessorMessage struct {
+	ImageID string `json:"image_id"`
+	UserId string `json:"user_id"`
+	Filename string `json:"filename"`
 }
 
 type ImageProcessorFolder string
@@ -129,6 +135,24 @@ func logStructured(level LogLevel, message string, err error, statusCode int, in
 	
 	jsonLog, _ := json.MarshalIndent(logEntry, "", "  ")
 	fmt.Println(string(jsonLog))
+}
+
+// jsonStringify safely converts any struct to JSON string
+func jsonStringify(data interface{}) (string, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+	return string(jsonBytes), nil
+}
+
+// jsonStringifyPretty converts any struct to pretty-printed JSON string
+func jsonStringifyPretty(data interface{}) (string, error) {
+	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+	return string(jsonBytes), nil
 }
 
 func initStorage() error{
@@ -276,6 +300,29 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	// Log successful upload
 	logStructured(INFO, fmt.Sprintf("Image uploaded successfully: %s (%.2f KB)", imageInfo.Filename, float64(imageInfo.Size)/1024), nil, 200, false)
 	
+	imageProcessorMessage := ImageProcessorMessage{
+		ImageID: imageID,
+		UserId: imageInfo.userId,
+		Filename: imageInfo.Filename,
+	}
+	
+	// JSON stringify the message using helper function
+	messageJSON, err := jsonStringify(imageProcessorMessage)
+	if err != nil {
+		logStructured(ERROR, "Failed to marshal message to JSON", err, 0, true)
+		// Continue with upload success even if message publishing fails
+	} else {
+		err = PublishMessage(Message{
+			Pattern: "image-processor",
+			Message: messageJSON,
+			MessageId: imageID,
+		})
+		if err != nil {
+			logStructured(ERROR, "Failed to publish message", err, 0, false)
+		} else {
+			logStructured(INFO, fmt.Sprintf("Message published successfully for image: %s", imageID), nil, 0, false)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(imageInfo)
 }
@@ -318,6 +365,16 @@ func main() {
 		fmt.Println("Error initializing storage:", err)
 		return
 	}
+	redisUrl := os.Getenv("REDIS_URL")
+	queueName := os.Getenv("QUEUE_NAME")
+	if redisUrl == "" {
+		fmt.Println("No REDIS_URL provided.")
+		return
+	}
+	publisherOptions := Options{
+		QueueName: queueName,
+	}
+	InitializePublisher(redisUrl, publisherOptions)
 	defer CloseS3Connection()
 	// Start the HTTP server on port 8080
 	fmt.Println("Server listening on", port)
