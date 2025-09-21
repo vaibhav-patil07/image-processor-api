@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/google/uuid"
 )
 
 type ServerUp struct{
@@ -241,9 +242,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		returnAppError(w, err.Error(), http.StatusBadRequest, err)
 		return
 	}
-
+	imageID := uuid.New().String();
 	// Try to insert into database if connection is available
-	filePath := fmt.Sprintf("%s/%s/%s", Uploads, userId, imageInfo.Filename) 
+	filePath := fmt.Sprintf("%s/%s/%s/%s", Uploads, userId, imageID,imageInfo.Filename) 
 	s3Object := s3.PutObjectInput{
 		Bucket: aws.String(GetS3Bucket()),
 		Key: aws.String(filePath),
@@ -262,6 +263,9 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		Width: imageInfo.Width,
 		Height: imageInfo.Height,
 		UserId: imageInfo.userId,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		ImageID: imageID,
 	}
 	err = InsertImage(imageObject)
 	if err != nil {

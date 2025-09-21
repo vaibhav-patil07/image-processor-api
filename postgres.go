@@ -50,11 +50,14 @@ func CreateImageTable() error {
 		format TEXT NOT NULL,
 		width INT NOT NULL,
 		height INT NOT NULL,
-		user_id TEXT NOT NULL
+		user_id TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL,
+		updated_at TIMESTAMP NOT NULL,
+		image_id TEXT NOT NULL UNIQUE
 	`)
 }
 
 func InsertImage(image ImageSchema) error {
-	_, err := DBConnection.Exec("INSERT INTO images (filename, size, format, width, height, user_id) VALUES ($1, $2, $3, $4, $5, $6)", image.Filename, image.Size, image.Format, image.Width, image.Height, image.UserId)
+	_, err := DBConnection.Exec("INSERT INTO images (filename, size, format, width, height, user_id, created_at, updated_at, image_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)", image.Filename, image.Size, image.Format, image.Width, image.Height, image.UserId, image.CreatedAt, image.UpdatedAt, image.ImageID)
 	return err
 }
