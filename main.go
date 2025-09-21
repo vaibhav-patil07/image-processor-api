@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -50,6 +52,84 @@ const (
 	Resized ImageProcessorFolder = "resized"
 )
 
+// LogLevel represents different log levels
+type LogLevel string
+
+const (
+	INFO  LogLevel = "INFO"
+	WARN  LogLevel = "WARN"
+	ERROR LogLevel = "ERROR"
+	DEBUG LogLevel = "DEBUG"
+)
+
+// StackFrame represents a single stack frame
+type StackFrame struct {
+	Function string `json:"function"`
+	File     string `json:"file"`
+	Line     string `json:"line"`
+}
+
+// logStructured logs a structured message with optional stack trace
+func logStructured(level LogLevel, message string, err error, statusCode int, includeStack bool) {
+	logEntry := map[string]interface{}{
+		"level":     level,
+		"timestamp": time.Now().Format(time.RFC3339),
+		"message":   message,
+	}
+	
+	if err != nil {
+		logEntry["error"] = err.Error()
+	}
+	
+	if statusCode != 0 {
+		logEntry["statusCode"] = statusCode
+	}
+	
+	if includeStack {
+		// Parse stack trace into structured format
+		stackTrace := string(debug.Stack())
+		stackLines := strings.Split(stackTrace, "\n")
+		
+		var frames []StackFrame
+		for i := 1; i < len(stackLines)-1; i += 2 { // Stack trace comes in pairs
+			if i+1 < len(stackLines) && strings.TrimSpace(stackLines[i]) != "" {
+				functionLine := strings.TrimSpace(stackLines[i])
+				fileLine := strings.TrimSpace(stackLines[i+1])
+				
+				// Parse file and line number
+				parts := strings.Split(fileLine, ":")
+				file := ""
+				line := ""
+				if len(parts) >= 2 {
+					file = parts[0]
+					line = parts[1]
+					// Remove extra info after line number
+					if spaceIndex := strings.Index(line, " "); spaceIndex != -1 {
+						line = line[:spaceIndex]
+					}
+				}
+				
+				frames = append(frames, StackFrame{
+					Function: functionLine,
+					File:     file,
+					Line:     line,
+				})
+				
+				// Limit to first 10 frames for readability
+				if len(frames) >= 10 {
+					break
+				}
+			}
+		}
+		
+		logEntry["stackTrace"] = frames
+		logEntry["rawStack"] = stackTrace // Keep for debugging
+	}
+	
+	jsonLog, _ := json.MarshalIndent(logEntry, "", "  ")
+	fmt.Println(string(jsonLog))
+}
+
 func initStorage() error{
 	host := os.Getenv("STORAGE_END_POINT")
 	region := os.Getenv("STORAGE_REGION")
@@ -71,11 +151,16 @@ func initStorage() error{
 	return nil
 }
 
-func returnAppError(w http.ResponseWriter, message string, statusCode int) {
+func returnAppError(w http.ResponseWriter, message string, statusCode int, err error) {
 	appError := AppError{Message: message}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(appError)
+	
+	// Log the error with structured stack trace
+	if err != nil {
+		logStructured(ERROR, message, err, statusCode, true)
+	}
 }
 
 func parseFileFromForm(r *http.Request, sizeLimit int64) (File, error) {
@@ -138,13 +223,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	userId := r.Header.Get("x-user-id")
 	if userId == "" {
-		returnAppError(w, "User ID is missing", http.StatusBadRequest)
+		returnAppError(w, "User ID is missing", http.StatusBadRequest, nil)
 		return
 	}
 	
 	file, err := parseFileFromForm(r, 10 << 20)
 	if err != nil {
-		returnAppError(w, "Unable to parse file", http.StatusBadRequest)
+		returnAppError(w, "Unable to parse file", http.StatusBadRequest, err)
 		return
 	}
 	defer file.File.Close()
@@ -153,7 +238,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	imageInfo.userId = userId
 
 	if err != nil {
-		returnAppError(w, err.Error(), http.StatusBadRequest)
+		returnAppError(w, err.Error(), http.StatusBadRequest, err)
 		return
 	}
 
@@ -167,7 +252,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	err = UploadFileToS3(&s3Object)
 	if err != nil {
 		fmt.Println("Error uploading file to storage:", err)
-		returnAppError(w, "Unable to save file to storage", http.StatusInternalServerError)
+		returnAppError(w, "Unable to save file to storage", http.StatusInternalServerError, err)
 		return
 	}
 	imageObject := ImageSchema{
@@ -181,9 +266,12 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	err = InsertImage(imageObject)
 	if err != nil {
 		fmt.Println("Error saving file to database:", err)
-		returnAppError(w, "Unable to save file to database", http.StatusInternalServerError)
+		returnAppError(w, "Unable to save file to database", http.StatusInternalServerError, err)
 		return
 	}
+	// Log successful upload
+	logStructured(INFO, fmt.Sprintf("Image uploaded successfully: %s (%.2f KB)", imageInfo.Filename, float64(imageInfo.Size)/1024), nil, 200, false)
+	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(imageInfo)
 }
