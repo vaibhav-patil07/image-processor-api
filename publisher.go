@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
-	bullpublisher "github.com/kiwfy/golang-bull-publisher"
+	"github.com/ktbsomen/gobullmq"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -16,45 +14,40 @@ type Message struct {
 	MessageId string
 }
 
-
 type Options struct {
 	QueueName string
 }
-var Publisher *bullpublisher.Publisher = nil
 
-var publisherOptions Options = Options{
-	QueueName: "default",
-};
+var messageQueue *gobullmq.Queue = nil
 
 func InitializePublisher(redisUrl string,options Options) error {
 	redis := redis.NewClient(&redis.Options{
 		Addr: redisUrl,
 	})
-	context := context.Background()
-	publisher := &bullpublisher.Publisher{
-		Redis:   redis,
-		Context: context,
+
+	pong, err := redis.Ping(context.Background()).Result()
+	if err != nil {
+		return err
 	}
-	Publisher = publisher
-	publisherOptions = options
+	fmt.Println("Redis connected successfully", pong)
+	context := context.Background()
+
+	queue ,err:= gobullmq.NewQueue(context, options.QueueName, redis);
+	if err != nil {
+		return err
+	}
+	messageQueue = queue
 	fmt.Println("Publisher initialized successfully")
 	return nil
 }
 
 func PublishMessage(message Message) error {
-	if Publisher == nil {
+	if messageQueue == nil {
 		return errors.New("publisher not initialized")
 	}
-	return Publisher.AddJob(publisherOptions.QueueName,message, bullpublisher.Options{
-			Attempts:           1,
-			Backoff:            0,
-			Delay:              0,
-			Lifo:               false,
-			PreventParsingData: false,
-			Priority:           0,
-			RemoveOnComplete:   10,
-			RemoveOnFail:       1,
-			Timeout:            0,
-			Timestamp:          time.Now().Unix(),
-	}, message.MessageId)
+	_,err := messageQueue.Add(context.Background(), message.Pattern,message)
+	if err != nil {
+		return err
+	}
+	return nil
 }
