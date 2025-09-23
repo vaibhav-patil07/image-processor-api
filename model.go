@@ -12,4 +12,5 @@ type ImageSchema struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	ImageID string `json:"image_id"`
+	JOB_STATUS string `json:"job_status"`
 }

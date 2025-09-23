@@ -269,6 +269,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	imageID := uuid.New().String();
 	// Try to insert into database if connection is available
 	filePath := fmt.Sprintf("%s/%s/%s/%s", Uploads, userId, imageID,imageInfo.Filename) 
+	file.File.Seek(0, 0)
 	s3Object := s3.PutObjectInput{
 		Bucket: aws.String(GetS3Bucket()),
 		Key: aws.String(filePath),
@@ -290,6 +291,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		ImageID: imageID,
+		JOB_STATUS: "in-queue",
 	}
 	err = InsertImage(imageObject)
 	if err != nil {

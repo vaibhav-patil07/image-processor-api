@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/ktbsomen/gobullmq"
 	"github.com/redis/go-redis/v9"
 )
 
 type Message struct {
-	Pattern string
-	Message string
-	MessageId string
+	Pattern string `json:"pattern"`
+	Message string `json:"message"`
+	MessageId string `json:"message_id"`
 }
 
 type Options struct {
