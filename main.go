@@ -335,6 +335,10 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		helloMessage:= ServerUp{ Message: "Server is up and running :)"}
 		w.Header().Set("Content-Type", "application/json")
+		err := PingPublisher()
+		if err != nil {
+			helloMessage.Message = "Server is up and running :) but publisher is not connected"
+		}
 		json.NewEncoder(w).Encode(helloMessage)
 	})
 
