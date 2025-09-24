@@ -23,9 +23,11 @@ var messageQueue *gobullmq.Queue = nil
 var redisClient *redis.Client = nil
 
 func InitializePublisher(redisUrl string,options Options) error {
-	redis := redis.NewClient(&redis.Options{
-		Addr: redisUrl,
-	})
+	opt, err := redis.ParseURL(redisUrl)
+	if err != nil {
+		return err
+	}
+	redis := redis.NewClient(opt)
 	redisClient = redis
 	pong, err := redis.Ping(context.Background()).Result()
 	if err != nil {

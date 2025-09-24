@@ -380,7 +380,11 @@ func main() {
 	publisherOptions := Options{
 		QueueName: queueName,
 	}
-	InitializePublisher(redisUrl, publisherOptions)
+	err = InitializePublisher(redisUrl, publisherOptions)
+	if err != nil {
+		fmt.Println("Error initializing publisher:", err)
+		return
+	}
 	defer CloseS3Connection()
 	// Start the HTTP server on port 8080
 	fmt.Println("Server listening on", port)
