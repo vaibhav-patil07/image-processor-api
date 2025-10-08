@@ -1,15 +1,21 @@
 package main
 
 import (
-  "database/sql"
-  "fmt"
-  _ "github.com/lib/pq"
+	"database/sql"
+	"fmt"
+
+	_ "github.com/lib/pq"
 )
 
 
 
 type DBConfig struct {
 	URL string
+}
+
+type ImagesResponse struct {
+	Images []ImageSchema `json:"images"`
+	TotalCount int `json:"count"`
 }
 
 var DBConnection *sql.DB = nil
@@ -61,4 +67,33 @@ func CreateImageTable() error {
 func InsertImage(image ImageSchema) error {
 	_, err := DBConnection.Exec("INSERT INTO images (filename, size, format, width, height, user_id, created_at, updated_at, image_id,job_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)", image.Filename, image.Size, image.Format, image.Width, image.Height, image.UserId, image.CreatedAt, image.UpdatedAt, image.ImageID,image.JOB_STATUS)
 	return err
+}
+
+func GetImagesByUserId(userId string, skip int, limit int, jobsStatus string) (ImagesResponse, error) {
+	query := ""
+	var rows *sql.Rows = nil;
+	var err error = nil;
+	if jobsStatus == "" {
+		query = "SELECT * ,count(*) OVER() AS total_count FROM images WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+		rows, err = DBConnection.Query(query, userId, limit, skip)
+	} else {
+		query = "SELECT * ,count(*) OVER() AS total_count FROM images WHERE user_id = $1 AND job_status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+		rows, err = DBConnection.Query(query, userId, jobsStatus, limit, skip)
+	}
+	if err != nil {
+		return ImagesResponse{}, err
+	}
+	defer rows.Close()
+	images := []ImageSchema{}
+	totalCount := 0
+	// var totalCount int
+	for rows.Next() {
+		var image ImageSchema
+		err := rows.Scan(&image.ImageID, &image.Filename, &image.Size, &image.Format, &image.Width, &image.Height, &image.UserId, &image.CreatedAt, &image.UpdatedAt, &image.ImageID, &image.JOB_STATUS, &totalCount)
+		if err != nil {
+			return ImagesResponse{}, err
+		}
+		images = append(images, image)
+	}
+	return ImagesResponse{Images: images, TotalCount: totalCount}, nil
 }

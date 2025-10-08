@@ -14,12 +14,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -140,15 +142,6 @@ func logStructured(level LogLevel, message string, err error, statusCode int, in
 // jsonStringify safely converts any struct to JSON string
 func jsonStringify(data interface{}) (string, error) {
 	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal to JSON: %w", err)
-	}
-	return string(jsonBytes), nil
-}
-
-// jsonStringifyPretty converts any struct to pretty-printed JSON string
-func jsonStringifyPretty(data interface{}) (string, error) {
-	jsonBytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal to JSON: %w", err)
 	}
@@ -329,10 +322,35 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(imageInfo)
 }
 
+func getImagesByUserId(w http.ResponseWriter, r *http.Request) {
+	userId := mux.Vars(r)["user_id"]
+	skip, err := strconv.Atoi(r.URL.Query().Get("skip"))
+	if err != nil {
+		skip = 0
+	}
+	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+	if err != nil {
+		limit = 100
+	}
+	jobsStatus := r.URL.Query().Get("jobs_status")
+	if userId == "" {
+		returnAppError(w, "User ID is missing", http.StatusBadRequest, nil)
+		return
+	}
+	imagesResponse, err := GetImagesByUserId(userId, skip, limit, jobsStatus)
+	if err != nil {
+		returnAppError(w, "Unable to get images", http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(imagesResponse)
+}
+
 func main() {
 
+	router :=  mux.NewRouter()
 	// Register a handler function for the root path "/"
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		helloMessage:= ServerUp{ Message: "Server is up and running :)"}
 		w.Header().Set("Content-Type", "application/json")
 		err := PingPublisher()
@@ -340,10 +358,11 @@ func main() {
 			helloMessage.Message = "Server is up and running :) but publisher is not connected"
 		}
 		json.NewEncoder(w).Encode(helloMessage)
-	})
+	}).Methods("GET")
 
 	// Register the upload handler
-	http.HandleFunc("/upload", uploadHandler)
+	router.HandleFunc("/upload", uploadHandler).Methods("POST")
+	router.HandleFunc("/images/{user_id}", getImagesByUserId).Methods("GET")
 
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Println("No .env file found, using system environment variables.")
@@ -388,7 +407,7 @@ func main() {
 	defer CloseS3Connection()
 	// Start the HTTP server on port 8080
 	fmt.Println("Server listening on", port)
-	err = http.ListenAndServe(":"+port, nil)
+	err = http.ListenAndServe(":"+port, router)
 	if err != nil {
 		fmt.Printf("Server failed to start: %v\n", err)
 	}
