@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -16,14 +17,18 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/nfnt/resize"
+	"github.com/rs/cors"
 )
 
 type ServerUp struct{
@@ -59,7 +64,15 @@ type ImageProcessorFolder string
 const (
 	Uploads ImageProcessorFolder = "uploads"
 	Resized ImageProcessorFolder = "resized"
+	Thumbnail ImageProcessorFolder = "thumbnail"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+var addWSClientMutex sync.Mutex = sync.Mutex{}
 
 // LogLevel represents different log levels
 type LogLevel string
@@ -232,14 +245,29 @@ func parseImageFromFile(file File) (ImageInfo, error) {
 	return imageInfo, nil
 }
 
+func resizeImage(file File) ( *bytes.Buffer, error) {
+	img, format, err := image.Decode(file.File)
+	if err != nil {
+		logStructured(ERROR, "Unable to decode image", err, 0, true)
+		return nil, errors.New("unable to decode image")
+	}
+	resizedImg := resize.Resize(300, 0, img, resize.Lanczos3)
+	buf := new(bytes.Buffer)
+	if format == "png" {
+		err = png.Encode(buf, resizedImg)
+	} else {
+		err = jpeg.Encode(buf, resizedImg, nil)
+	}
+	if err != nil {
+		logStructured(ERROR, "Unable to encode image", err, 0, true)
+		return nil, errors.New("unable to encode image")
+	}
+	return buf, nil
+}
+
 // uploadHandler handles image file uploads and prints image information
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	userId := r.Header.Get("x-user-id")
+	userId := mux.Vars(r)["user_id"]
 	if userId == "" {
 		returnAppError(w, "User ID is missing", http.StatusBadRequest, nil)
 		return
@@ -274,6 +302,24 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		returnAppError(w, "Unable to save file to storage", http.StatusInternalServerError, err)
 		return
 	}
+
+	// Resize image
+	file.File.Seek(0, 0)
+	buf, err := resizeImage(file)
+	if err != nil {
+		returnAppError(w, "Unable to resize image", http.StatusInternalServerError, err)
+		return
+	}
+	s3Object.Body = buf
+	filePath = fmt.Sprintf("%s/%s/%s/%s", Thumbnail, userId, imageID, imageInfo.Filename)
+	s3Object.Key = aws.String(filePath)
+	err = UploadFileToS3(&s3Object)
+	if err != nil {
+		fmt.Println("Error uploading file to storage:", err)
+		returnAppError(w, "Unable to save file to storage", http.StatusInternalServerError, err)
+		return
+	}
+
 	imageObject := ImageSchema{
 		Filename: imageInfo.Filename,
 		Size: imageInfo.Size,
@@ -346,9 +392,37 @@ func getImagesByUserId(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(imagesResponse)
 }
 
+func updateImageJobStatus(w http.ResponseWriter, r *http.Request) {
+	userId := mux.Vars(r)["user_id"]
+	if userId == "" {
+		returnAppError(w, "User ID is missing", http.StatusBadRequest, nil)
+		return
+	}
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		returnAppError(w, "Unable to upgrade to websocket", http.StatusInternalServerError, err)
+		return
+	}
+	defer ws.Close()
+	addWSClientMutex.Lock()
+	clients[userId] = ws
+	addWSClientMutex.Unlock()
+
+	for {
+		_, _, err := ws.ReadMessage()
+		if err != nil {
+			addWSClientMutex.Lock()
+			delete(clients, userId)
+			addWSClientMutex.Unlock()
+			return
+		}
+	}
+}
+
 func main() {
 
 	router :=  mux.NewRouter()
+
 	// Register a handler function for the root path "/"
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		helloMessage:= ServerUp{ Message: "Server is up and running :)"}
@@ -361,8 +435,9 @@ func main() {
 	}).Methods("GET")
 
 	// Register the upload handler
-	router.HandleFunc("/upload", uploadHandler).Methods("POST")
-	router.HandleFunc("/images/{user_id}", getImagesByUserId).Methods("GET")
+	router.HandleFunc("/users/{user_id}/images", uploadHandler).Methods("POST")
+	router.HandleFunc("/users/{user_id}/images", getImagesByUserId).Methods("GET")
+	router.HandleFunc("/ws/users/{user_id}/images", updateImageJobStatus).Methods("GET")
 
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Println("No .env file found, using system environment variables.")
@@ -404,10 +479,18 @@ func main() {
 		fmt.Println("Error initializing publisher:", err)
 		return
 	}
+	err = InitializeEventSubscriber(redisUrl)
+	if err != nil {
+		fmt.Println("Error initializing event subscriber:", err)
+		return
+	}
+	go SubscribeToEvent("image-processor-progress")
+	defer CloseEventSubscriber()
 	defer CloseS3Connection()
+	corsHandler := cors.AllowAll().Handler(router)
 	// Start the HTTP server on port 8080
 	fmt.Println("Server listening on", port)
-	err = http.ListenAndServe(":"+port, router)
+	err = http.ListenAndServe(":"+port, corsHandler)
 	if err != nil {
 		fmt.Printf("Server failed to start: %v\n", err)
 	}

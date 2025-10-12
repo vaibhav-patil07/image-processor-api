@@ -60,7 +60,9 @@ func CreateImageTable() error {
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL,
 		image_id TEXT NOT NULL UNIQUE,
-		job_status TEXT NOT NULL
+		job_status TEXT NOT NULL,
+		compressed_at TIMESTAMP,
+		compressed_size INT
 	`)
 }
 
@@ -89,7 +91,7 @@ func GetImagesByUserId(userId string, skip int, limit int, jobsStatus string) (I
 	// var totalCount int
 	for rows.Next() {
 		var image ImageSchema
-		err := rows.Scan(&image.ImageID, &image.Filename, &image.Size, &image.Format, &image.Width, &image.Height, &image.UserId, &image.CreatedAt, &image.UpdatedAt, &image.ImageID, &image.JOB_STATUS, &totalCount)
+		err := rows.Scan(&image.ImageID, &image.Filename, &image.Size, &image.Format, &image.Width, &image.Height, &image.UserId, &image.CreatedAt, &image.UpdatedAt, &image.ImageID, &image.JOB_STATUS, &image.COMPRESSED_AT, &image.COMPRESSED_SIZE, &totalCount)
 		if err != nil {
 			return ImagesResponse{}, err
 		}

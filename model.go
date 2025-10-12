@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 type ImageSchema struct {
 	Filename string `json:"filename"`
@@ -13,4 +16,6 @@ type ImageSchema struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	ImageID string `json:"image_id"`
 	JOB_STATUS string `json:"job_status"`
+	COMPRESSED_AT sql.NullTime `json:"compressed_at"`
+	COMPRESSED_SIZE sql.NullInt64 `json:"compressed_size"`
 }
