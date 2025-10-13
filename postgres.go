@@ -18,6 +18,10 @@ type ImagesResponse struct {
 	TotalCount int `json:"count"`
 }
 
+type ImageResponse struct {
+	Image ImageSchema `json:"image"`
+}
+
 var DBConnection *sql.DB = nil
 
 func GetDBConnection(config DBConfig) (*sql.DB, error) {
@@ -98,4 +102,16 @@ func GetImagesByUserId(userId string, skip int, limit int, jobsStatus string) (I
 		images = append(images, image)
 	}
 	return ImagesResponse{Images: images, TotalCount: totalCount}, nil
+}
+
+func GetImageById(imageID string, userId string) (ImageResponse, error) {
+	query := "SELECT * FROM images WHERE image_id = $1 AND user_id = $2"
+	row := DBConnection.QueryRow(query, imageID, userId)
+	var image ImageSchema
+	err := row.Scan(&image.ImageID, &image.Filename, &image.Size, &image.Format, &image.Width, &image.Height, &image.UserId, &image.CreatedAt, &image.UpdatedAt, &image.ImageID, &image.JOB_STATUS, &image.COMPRESSED_AT, &image.COMPRESSED_SIZE)
+	if err != nil {
+		return ImageResponse{}, err
+	}
+	response := ImageResponse{Image: image}
+	return response, nil	
 }

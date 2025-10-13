@@ -419,6 +419,26 @@ func updateImageJobStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func getImageById(w http.ResponseWriter, r *http.Request) {
+	imageID := mux.Vars(r)["image_id"]
+	if imageID == "" {
+		returnAppError(w, "Image ID is missing", http.StatusBadRequest, nil)
+		return
+	}
+	userId := mux.Vars(r)["user_id"]
+	if userId == "" {
+		returnAppError(w, "User ID is missing", http.StatusBadRequest, nil)
+		return
+	}
+	image, err := GetImageById(imageID, userId)
+	if err != nil {
+		returnAppError(w, "Unable to get image", http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(image)
+}
+
 func main() {
 
 	router :=  mux.NewRouter()
@@ -438,6 +458,7 @@ func main() {
 	router.HandleFunc("/users/{user_id}/images", uploadHandler).Methods("POST")
 	router.HandleFunc("/users/{user_id}/images", getImagesByUserId).Methods("GET")
 	router.HandleFunc("/ws/users/{user_id}/images", updateImageJobStatus).Methods("GET")
+	router.HandleFunc("/users/{user_id}/images/{image_id}", getImageById).Methods("GET")
 
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Println("No .env file found, using system environment variables.")
